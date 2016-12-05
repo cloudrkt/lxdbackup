@@ -32,13 +32,13 @@ git clone https://github.com/cloudrkt/lxdbackup
 Then copy the lxdbackup to your $path:
 
 ```
-cd lxdbackup && cp lxdbackup /usr/local/bin/
+cd lxdbackup && cp lxdbackup /usr/bin/
 ```
 
 Don't forget to make it executable:
 
 ```
-chmod +x /usr/local/bin/lxbackup
+chmod +x /usr/bin/lxbackup
 ```
 
 Then test it with:
