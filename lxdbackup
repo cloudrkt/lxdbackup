@@ -1,0 +1,170 @@
+#!/usr/bin/env bash
+#
+# A script to backup your LXC containers to your favorite cloudstorage with Rclone.
+# Usage: lxdbackup container-name
+# Git: https://github.com/cloudrkt/lxdbackup
+# Author: Rosco Nap - cloudrkt.com/lxdbackup-script
+#
+# Settings
+
+# The target bucket or container in your Rclone cloudstorage 
+RCLONETARGETDIR="lxdbackup" 
+# Optional Rclone settings.
+RCLONEOPTIONS=""
+# Rclone target cloud used in your rlcone.conf
+RCLONETARGET=""
+# Directory were local images are stored before upload
+WORKDIR="/tmp/lxdbackup"
+
+# Cleanup when exiting unclean
+trap "cleanup; echo 'Unclean exit'" INT SIGHUP SIGINT SIGTERM 
+
+if [ "$#" -ne 1 ]; then
+    echo "Usage: $0 <container-name>"
+    exit 1
+fi
+
+# Default behaviour
+LXCCONTAINER="$1"
+BACKUPDATE=$(date +"%m-%d-%y-%H-%M")
+RCLONE=$(which rclone)
+LXC=$(which lxc)
+
+# Check if which is finding the executables to contintue. 
+if [ -z "$LXC" ]; then
+    echo "LXC command NOT found?"; 
+    exit 1 ;
+fi
+
+if [ -z "$RCLONE" ]; then
+    echo "RCLONE command NOT found";
+    exit 1 ;
+fi
+
+# Functions
+lecho () {
+   logger "lxdbackup: $LXCCONTAINER - $@"
+   echo $@
+} 
+
+# Checking backupdate
+check_backupdate () {
+    if [ -z "$BACKUPDATE" ]; then
+        lecho "Could not determine backupdate: $BACKUPDATE"
+        return 1
+    fi
+}
+
+# Cleanup the LXC snapshots
+cleanup_snapshot () {
+    check_backupdate
+    if $LXC info $LXCCONTAINER|grep -q $BACKUPDATE; then 
+        if $LXC delete $LXCCONTAINER/$BACKUPDATE; then
+            lecho "Cleanup: Succesfully deleted snapshot $LXCCONTAINER/$BACKUPDATE - $OUTPUT"
+        else
+            lecho "Cleanup: Could not delete snapshot $LXCCONTAINER/$BACKUPDATE - $OUTPUT"
+            return 1
+        fi
+    fi
+} 
+
+# Cleanup the image created by LXC
+cleanup_image () {
+    check_backupdate
+    if $LXC image info $LXCCONTAINER-BACKUP-$BACKUPDATE-IMAGE; then
+        if $LXC image delete $LXCCONTAINER-BACKUP-$BACKUPDATE-IMAGE; then
+            lecho "Cleanup: Succesfully deleted copy $LXCCONTAINER-BACKUP-$BACKUPDATE-IMAGE"
+        else
+            lecho "Cleanup: Could not delete snapshot $LXCCONTAINER-BACKUP-$BACKUPDATE-IMAGE"
+            return 1
+        fi
+    fi
+}
+
+# Delete the published image from the local backupstore.
+cleanup_published_image () {
+    check_backupdate
+    if [[ -f "$WORKDIR/$LXCCONTAINER-BACKUP-$BACKUPDATE-IMAGE.tar.gz" ]]; then
+        if rm $WORKDIR/$LXCCONTAINER-BACKUP-$BACKUPDATE-IMAGE.tar.gz; then
+            lecho "Cleanup: Succesfully deleted published image $WORKDIR/$LXCCONTAINER-BACKUP-$BACKUPDATE-IMAGE.tar.gz"
+        else
+            lecho "Cleanup: Could not delete published image $WORKDIR/$LXCCONTAINER-BACKUP-$BACKUPDATE-IMAGE.tar.gz"
+            return 1
+        fi
+    fi
+}
+
+# Aggregated cleanup functions
+cleanup () {
+    cleanup_snapshot
+    cleanup_image
+    cleanup_published_image
+}
+
+# Main backup script
+main () {
+    if [ ! -d "$WORKDIR" ]; then
+        mkdir $WORKDIR && cd $WORKDIR
+        lecho "Backup directory: $WORKDIR created for temporary backup storage"
+    fi
+
+    # Change to the workdir for all the file store operations
+    cd $WORKDIR
+
+    # Check lxc container is ok
+    if $LXC info $LXCCONTAINER > /dev/null 2>&1 ; then
+        lecho "Info: Container $LXCCONTAINER found, continuing.."
+    else
+        lecho "Info: Container $LXCCONTAINER NOT found, exiting lxdbackup"
+        return 1
+    fi
+
+    # Create snapshot with date as name
+    if $LXC snapshot $LXCCONTAINER $BACKUPDATE; then
+        lecho "Snapshot: Succesfully created snaphot $BACKUPDATE on container $LXCCONTAINER"
+    else
+        lecho "Snapshot: Could not create snaphot $BACKUPDATE on container $LXCCONTAINER"
+        return 1
+    fi
+
+    # lxc publish --force container-name-backup-date --alias webserver-backup-date
+    if $LXC publish --force $LXCCONTAINER/$BACKUPDATE --alias $LXCCONTAINER-BACKUP-$BACKUPDATE-IMAGE; then
+        lecho "Publish: Succesfully published an image of $LXCCONTAINER-BACKUP-$BACKUPDATE to $LXCCONTAINER-BACKUP-$BACKUPDATE-IMAGE"
+    else
+        lecho "Publish: Could not create image from $LXCCONTAINER-BACKUP-$BACKUPDATE to $LXCCONTAINER-BACKUP-$BACKUPDATE-IMAGE"
+        cleanup
+        return 1
+    fi
+
+    # Export lxc image to image.tar.gz file.
+    if $LXC image export $LXCCONTAINER-BACKUP-$BACKUPDATE-IMAGE $LXCCONTAINER-BACKUP-$BACKUPDATE-IMAGE; then
+        lecho "Image: Succesfully exported an image of $LXCCONTAINER-BACKUP-$BACKUPDATE-IMAGE to $WORKDIR/$LXCCONTAINER-BACKUP-$BACKUPDATE-IMAGE.tar.gz"
+    else
+        lecho "Image: Could not publish image from $LXCCONTAINER-BACKUP-$BACKUPDATE-IMAGE to $WORKDIR/$LXCCONTAINER-BACKUP-$BACKUPDATE-IMAGE.tar.gz"
+        cleanup
+        exit 1
+    fi
+
+    # Create the cloudstore backup if does not exist. 
+    if $RCLONE mkdir $RCLONETARGET:$RCLONETARGETDIR; then
+        lecho "Target directory: Succesfully created the $RCLONETARGET:$RCLONETARGETDIR directory"
+    else
+        lecho "Target directory: Could not create the $RCLONETARGET:$RCLONETARGETDIR directory"
+        cleanup
+        return 1
+    fi
+
+    # Upload the container image to the cloudstore backup. 
+    if $RCLONE $RCLONEOPTIONS copy $LXCCONTAINER-BACKUP-$BACKUPDATE-IMAGE.tar.gz $RCLONETARGET:$RCLONETARGETDIR/$LXCCONTAINER/; then
+        lecho "Upload: Succesfully uploaded $LXCCONTAINER-BACKUP-$BACKUPDATE-IMAGE.tar.gz image to $RCLONETARGET:$RCLONETARGETDIR/$LXCCONTAINER/$LXCCONTAINER-BACKUP-$BACKUPDATE-IMAGE.tar.gz"
+        cleanup
+        lecho "Upload: Backup $BACKUPDATE for $LXCCONTAINER uploaded succesfully to $RCLONETARGET."
+    else
+        lecho "Could not create the $RCLONETARGET:$RCLONETARGETDIR/$LXCCONTAINER/$LXCCONTAINER-BACKUP-$BACKUPDATE-IMAGE.tar.gz on $RCLONETARGET:$RCLONETARGETDIR/$LXCCONTAINER/"
+        cleanup
+        return 1
+    fi
+}
+
+main
+exit $?
