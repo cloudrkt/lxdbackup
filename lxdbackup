@@ -3,7 +3,7 @@
 # A script to backup your LXC containers to your favorite cloudstorage with Rclone.
 # Usage: lxdbackup container-name
 # Git: https://github.com/cloudrkt/lxdbackup
-# Author: Rosco Nap - loudrkt.com/lxdbackup-script.html
+# Author: Rosco Nap - cloudrkt.com/lxdbackup-script.html
 #
 # Settings
 
