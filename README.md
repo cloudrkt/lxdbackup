@@ -1,11 +1,11 @@
 # LXD Backup script
 
-This small Bash script will backup your LXC container with help of the Rlone Cloud backuptool.
+This small Bash script will backup your LXC container with help of the Rclone Cloud backuptool.
 
 ## What does it do:
 
 * This scripts creates a backup image from a snaphot from your LXC container that is managed with LXD. 
-* The script will upload your image to a cloudstore with Rlcone.
+* The script will upload your image to a cloudstore with Rclone.
 * Online backup of your LXC container
 * Creates an easy and ready to use LXC image to import with the LXC import command. 
 
